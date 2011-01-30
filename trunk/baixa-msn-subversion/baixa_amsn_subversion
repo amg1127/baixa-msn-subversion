@@ -1,0 +1,90 @@
+#!/bin/bash
+raiz="/usr/share/local"
+max=50000
+paralelo=0
+
+morre () {
+    echo "$1"
+    exit 1
+}
+
+( ps -C amsn > /dev/null 2>&1 ) && morre "Erro: existe um processo do aMSN em execucao."
+[ -d "$raiz" ] || morre "Erro: '$raiz' nao eh uma pasta."
+[ -w "$raiz" ] || morre "Erro: '$raiz' nao eh gravavel."
+cd "$raiz" || morre "Erro: nao pude entrar na pasta '$raiz'."
+[ -h amsn ] || morre "Erro: nao existe um link chamado 'amsn'."
+[ -d amsn ] || morre "Erro: o link chamado 'amsn' nao aponta para uma pasta."
+mkdir -p '.amsn_tmp' || morre "Erro: nao e possivel criar a pasta temporaria."
+cd '.amsn_tmp' || morre "Erro: nao e possivel entrar na pasta temporaria."
+echo  "Baixando arquivos..."
+svn cleanup amsn
+svn cleanup amsn-extras
+
+prefixo="https://amsn.svn.sourceforge.net/svnroot/amsn/trunk"
+
+for conta in `seq 1 $max`; do
+    ( ( ( svn co --non-interactive -r HEAD "${prefixo}/amsn" > /dev/stderr 2> /dev/stderr ) ; echo -n $? ) > status_1 ) & cvs1=$!
+    c2=0
+    while ps -p $cvs1 > /dev/null 2>&1; do
+        sleep 1
+        c2=$((c2+1))
+        [ $c2 -ge 30 ] && [ $paralelo -ne 0 ] && break
+    done
+    ( ( ( svn co --non-interactive -r HEAD "${prefixo}/amsn-extras" > /dev/stderr 2> /dev/stderr ) ; echo -n $? ) > status_2 ) & cvs2=$!
+    while ps -p $cvs1 > /dev/null 2>&1; do
+        sleep 1
+    done
+    while ps -p $cvs2 > /dev/null 2>&1; do
+        sleep 1
+    done
+    [ -d amsn ] && \
+    [ -d amsn-extras ] && \
+    [ -f status_1 ] && \
+    [ -f status_2 ] && \
+    [ `cat status_1` -eq 0 ] && \
+    [ `cat status_2` -eq 0 ] && \
+    break
+    svn cleanup amsn
+    svn cleanup amsn-extras
+    [ $paralelo -ne 0 ] && sleep 30
+done
+[ -d amsn ] || morre "Erro: a pasta 'amsn' nao existe."
+[ -d amsn-extras ] || morre "Erro: a pasta 'amsn-extras' nao existe."
+[ -f status_1 ] || morre "Erro: impossivel determinar estado de saida do comando 'svn'."
+[ -f status_2 ] || morre "Erro: impossivel determinar estado de saida do comando 'svn'."
+[ `cat status_1` -eq 0 ] || morre "Erro: comando SVN nao terminou normalmente."
+[ `cat status_2` -eq 0 ] || morre "Erro: comando SVN nao terminou normalmente."
+cd ".." || morre "Erro: nao pude entrar na pasta '$raiz'."
+pastaAMSN="amsn.svn`date +%d%m%Y`"
+if [ -d "$pastaAMSN" ]; then
+    mv -v "$pastaAMSN" "$pastaAMSN.old"
+    rm -fv amsn
+    ln -sv "$pastaAMSN.old" amsn
+fi
+cp -Rvf '.amsn_tmp/amsn' "$pastaAMSN"
+cp -Rvf '.amsn_tmp/amsn-extras/plugins' '.amsn_tmp/amsn-extras/skins' "$pastaAMSN/"
+if [ -d '.amsn_tmp/amsn-extras-amg1127' ]; then
+    for item in .amsn_tmp/amsn-extras-amg1127/*; do
+        cp -Rvf "$item" "$pastaAMSN/"
+    done
+fi
+mv -v "$pastaAMSN/amsn" "$pastaAMSN/amsn.tcl"
+cp -v --preserve=all -f amsn/start-amsn.sh amsn/amsn.desktop "$pastaAMSN/"
+rm -Rfv `readlink amsn`
+rm -fv amsn
+ln -sv "$pastaAMSN" amsn
+cd amsn
+find -name '.svn' | while read item; do
+    rm -Rfv "$item"
+done
+if ./configure --enable-debug; then
+    sed 's/^[[:space:]]*srcdir[[:space:]]*:=[[:space:]]*\.\.[[:space:]]*$/srcdir := ./' < Makefile > Makefile.temp
+    if [ "`sha1sum Makefile | awk '{ print $1; }'`" == "`sha1sum Makefile.temp | awk '{ print $1; }'`" ]; then
+        morre ' **** Opa! O comando de substituicao nao deu certo! ****'
+    fi
+    cat Makefile.temp > Makefile
+    rm -f Makefile.temp
+    make
+fi
+ln -s start-amsn.sh amsn
+echo "Concluido."
